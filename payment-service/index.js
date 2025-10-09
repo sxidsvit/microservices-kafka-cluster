@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { Kafka } from "kafkajs";
+import { Kafka, Partitioners } from "kafkajs";
 
 const app = express();
 
@@ -16,37 +16,49 @@ const kafka = new Kafka({
   brokers: ["localhost:9094", "localhost:9095", "localhost:9096"],
 });
 
-const producer = kafka.producer();
+const producer = kafka.producer({ createPartitioner: Partitioners.LegacyPartitioner }); // Fix KafkaJS warning
 
 const connectToKafka = async () => {
   try {
     await producer.connect();
     console.log("Producer connected!");
   } catch (err) {
-    console.log("Error connecting to Kafka", err);
+    console.error("Error connecting to Kafka:", err);
+    process.exit(1); // Exit if Kafka connection fails
   }
 };
 
 app.post("/payment-service", async (req, res) => {
-  const { cart } = req.body;
-  // ASSUME THAT WE GET THE COOKIE AND DECRYPT THE USER ID
-  const userId = "123";
+  try {
+    const { cart } = req.body;
+    if (!cart || !Array.isArray(cart)) {
+      return res.status(400).json({ error: "Invalid or missing cart" });
+    }
+    const userId = "123"; // TODO: Implement real user ID logic
 
-  // TODO:PAYMENT
+    // Send to Kafka
+    await producer.send({
+      topic: "payment-successful",
+      messages: [{ value: JSON.stringify({ userId, cart }) }],
+    });
+    console.log("Message sent to payment-successful:", { userId, cart });
 
-  // KAFKA
-  await producer.send({
-    topic: "payment-successful",
-    messages: [{ value: JSON.stringify({ userId, cart }) }],
-  });
-
-  setTimeout(() => {
-    return res.status(200).send("Payment successful");
-  }, 3000);
+    // Simulate payment processing delay
+    setTimeout(() => {
+      res.status(200).json({
+		token: "qwer1234",
+        message: "Payment successful - format JSON"
+      });
+    }, 3000);
+  } catch (error) {
+    console.error("Error in /payment-service:", error);
+    res.status(500).json({ error: "Internal server error", details: error.message });
+  }
 });
 
 app.use((err, req, res, next) => {
-  res.status(err.status || 500).send(err.message);
+  console.error("Global error:", err);
+  res.status(err.status || 500).json({ error: err.message || "Internal server error" });
 });
 
 app.listen(8000, () => {
